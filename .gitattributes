@@ -1,0 +1,3 @@
+# Store and check out every file byte-for-byte: no line-ending conversion.
+# The game source must stay identical to what built the shipped APK.
+* -text

@@ -1,0 +1,18 @@
+# Build output (build.sh / t.sh)
+build/
+shots/
+
+# Signing keys and built packages never go in the repo
+*.jks
+*.keystore
+*.apk
+
+# Local-only Claude Code files
+.claude/settings.local.json
+.claude/allow-source-edits
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
