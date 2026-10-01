@@ -1,0 +1,46 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_git_scope.py\" || python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_git_scope.py\"",
+            "statusMessage": "Checking git/GitHub command scope..."
+          },
+          {
+            "type": "command",
+            "command": "py \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\" || python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\"",
+            "statusMessage": "Checking the game source stays untouched..."
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_git_scope.py\" || python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/guard_git_scope.py\"",
+            "statusMessage": "Checking git/GitHub command scope..."
+          },
+          {
+            "type": "command",
+            "command": "py \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\" || python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\"",
+            "statusMessage": "Checking the game source stays untouched..."
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "py \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\" || python3 \"${CLAUDE_PROJECT_DIR}/.claude/hooks/protect_game_source.py\"",
+            "statusMessage": "Checking the game source stays untouched..."
+          }
+        ]
+      }
+    ]
+  }
+}
