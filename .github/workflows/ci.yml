@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  source-frozen:
+    name: Game source unchanged
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The game source is exactly what built the shipped APK. A PR may only
+      # change it when the owner has approved that by labelling the PR
+      # `game-code-change`.
+      - name: Compare game source with the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          APPROVED: ${{ contains(github.event.pull_request.labels.*.name, 'game-code-change') }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          changed=$(git diff --name-only FETCH_HEAD HEAD -- src res assets jvmtest AndroidManifest.xml build.sh kc.sh t.sh zipalign.py rules.pro)
+          if [ -z "$changed" ]; then
+            echo "Game source untouched."
+          elif [ "$APPROVED" = "true" ]; then
+            echo "Game source changed (approved with the game-code-change label):"
+            echo "$changed"
+          else
+            echo "::error::This PR changes game source without the game-code-change label:"
+            echo "$changed"
+            exit 1
+          fi
+
+  build-and-test:
+    name: Build APK & run tests
+    runs-on: ubuntu-latest
+    env:
+      KOTLIN_VERSION: "2.3.10"
+      BUILD_TOOLS: "34.0.0"
+      PLATFORM: "android-34"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Test the Claude Code hooks
+        run: python3 .claude/hooks/test_hooks.py
+
+      - name: Install Android platform and build-tools
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null || true
+          "$SDKM" "platforms;$PLATFORM" "build-tools;$BUILD_TOOLS" > /dev/null
+
+      - name: Install the Kotlin compiler
+        working-directory: ${{ runner.temp }}
+        run: |
+          base="https://github.com/JetBrains/kotlin/releases/download/v$KOTLIN_VERSION"
+          curl -fsSL -o kotlinc.zip "$base/kotlin-compiler-$KOTLIN_VERSION.zip"
+          curl -fsSL -o kotlinc.zip.sha256 "$base/kotlin-compiler-$KOTLIN_VERSION.zip.sha256"
+          echo "$(cut -d' ' -f1 kotlinc.zip.sha256)  kotlinc.zip" | sha256sum -c -
+          unzip -q kotlinc.zip
+
+      # build.sh, kc.sh and t.sh expect the project at /home/claude/tether and
+      # the toolchain in /home/claude/tc. Recreate that layout instead of
+      # editing the scripts.
+      - name: Lay out the toolchain where the build scripts expect it
+        run: |
+          sudo mkdir -p /home/claude
+          sudo chown "$USER" /home/claude
+          ln -s "$GITHUB_WORKSPACE" /home/claude/tether
+          TC=/home/claude/tc
+          mkdir -p "$TC"
+          BT="$ANDROID_HOME/build-tools/$BUILD_TOOLS"
+          ln -s "$BT/aapt2" "$TC/aapt2"
+          ln -s "$BT/lib/d8.jar" "$TC/d8.jar"
+          ln -s "$BT/lib/apksigner.jar" "$TC/apksigner.jar"
+          ln -s "$ANDROID_HOME/platforms/$PLATFORM/android.jar" "$TC/android.jar"
+          KL="$RUNNER_TEMP/kotlinc/lib"
+          cp "$KL"/*.jar "$TC/"
+          # The jar names kc.sh and t.sh put on the classpath. kotlin-compiler.jar
+          # finds its own dependencies through its manifest Class-Path.
+          cp "$KL/kotlin-compiler.jar"       "$TC/kotlin-jupyter-kernel-0.19.0-944-all.jar"
+          cp "$KL/kotlin-stdlib.jar"         "$TC/kotlin-stdlib-2.3.10-RC.jar"
+          cp "$KL/kotlin-reflect.jar"        "$TC/kotlin-reflect-2.3.10-RC.jar"
+          cp "$KL/kotlin-script-runtime.jar" "$TC/kotlin-script-runtime-2.4.0-dev-6891.jar"
+          unzip -l "$TC/d8.jar" | grep -q "com/android/tools/r8/R8.class"
+
+      - name: Build the APK (build.sh)
+        run: |
+          # build.sh and kc.sh filter compiler output and keep going, so judge
+          # the build by its output, not its exit code.
+          ./build.sh 2>&1 | tee build.log || true
+          if grep -E ": error:|^error:" build.log; then
+            echo "::error::Kotlin compile errors"; exit 1
+          fi
+          test -s build/Tether.apk
+          unzip -p build/Tether.apk classes.dex | grep -aq "Lcom/pranvir/tether/MainActivity;"
+          java -jar /home/claude/tc/apksigner.jar verify build/Tether.apk
+          /home/claude/tc/aapt2 dump badging build/Tether.apk | grep -E "^package:|^sdkVersion|^targetSdkVersion"
+
+      - name: Run the game's JVM tests (t.sh)
+        run: |
+          mkdir -p shots
+          ./t.sh Monkey AudioTest Sim Shots 2>&1 | tee test.log || true
+          if grep -E "Exception|: error:" test.log; then
+            echo "::error::A test failed"; exit 1
+          fi
+          grep -q "MONKEY OK" test.log
+          grep -q "AUDIO OK" test.log
+          grep -q "^avg " test.log
+          for s in 01_home 03_style_orb 06_play_spin 10_singularity 12_result; do test -s "shots/$s.png"; done
+
+      - name: Build and tests left the tracked files untouched
+        run: |
+          git status --porcelain --untracked-files=no
+          test -z "$(git status --porcelain --untracked-files=no)"
+
+      # Signed with a throwaway key that build.sh creates on the runner —
+      # for checking only, never a release build.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tether-ci-build
+          path: |
+            build/Tether.apk
+            shots/*.png
+          retention-days: 14
